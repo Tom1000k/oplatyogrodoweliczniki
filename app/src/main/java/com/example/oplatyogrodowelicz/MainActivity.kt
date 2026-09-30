@@ -31,6 +31,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import com.example.oplatyogrodowelicz.data.network.ApiService
 import java.net.URLEncoder
+import com.example.oplatyogrodowelicz.data.AdmToken
 
 class MainActivity : ComponentActivity() {
 
@@ -38,6 +39,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        AdmToken.init(this)
 
         checkAppVersion()
 
@@ -169,12 +172,32 @@ fun SMSApp() {
         }
     }
 
+
+    // Sesja wygasła (401 z serwera) -> komunikat i powrót do logowania
+    LaunchedEffect(Unit) {
+        AdmToken.sesjaWygasla.collect {
+            android.widget.Toast.makeText(
+                context, "Sesja wygasła. Zaloguj się ponownie.", android.widget.Toast.LENGTH_LONG
+            ).show()
+            val dane = prefsManager.getSavedLoginDataFull()
+            navController.navigate("ogrody") {
+                popUpTo(navController.graph.id) { inclusive = true }
+            }
+            if (!dane.ogrodId.isNullOrEmpty() && !dane.miasto.isNullOrEmpty() && !dane.nazwaOgrodu.isNullOrEmpty()) {
+                val encodedMiasto = URLEncoder.encode(dane.miasto, "UTF-8")
+                val encodedNazwa = URLEncoder.encode(dane.nazwaOgrodu, "UTF-8")
+                navController.navigate("login/${dane.ogrodId}/$encodedMiasto/$encodedNazwa")
+            }
+        }
+    }
+
     NavHost(
         navController = navController,
         startDestination = "ogrody"  // Zawsze startuj od ogrody
     ) {
         // Ekran wyboru ogrodu
         composable("ogrody") {
+            LaunchedEffect(Unit) { AdmToken.usun() }
             OgrodyScreen(
                 onOgrodSelected = { ogrod, miasto ->
                     // Przejdź do logowania z ID ogrodu, miastem i nazwą

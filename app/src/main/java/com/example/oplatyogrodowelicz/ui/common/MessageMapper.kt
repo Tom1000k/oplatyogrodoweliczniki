@@ -38,6 +38,15 @@ object MessageMapper {
                     errorMessage.contains("spróbuj za 5 minut", ignoreCase = true) ->
                 UiMessage.Error("Za dużo nieudanych prób. Odczekaj 5 minut przed kolejną próbą")
 
+            errorMessage.contains("sesja wygasła", ignoreCase = true) ->
+                UiMessage.Error("Sesja wygasła. Zaloguj się ponownie.", "OK")
+
+            errorMessage.contains("błędne hasło", ignoreCase = true) ->
+                UiMessage.Error("Błędne hasło", "Spróbuj ponownie")
+
+            errorMessage.contains("nie ma użytkownika", ignoreCase = true) ->
+                UiMessage.Error(errorMessage, "OK")
+
             // Błędy danych
             errorMessage.contains("błąd parsowania", ignoreCase = true) ->
                 UiMessage.Error("Problem z danymi. Spróbuj ponownie", "OK")

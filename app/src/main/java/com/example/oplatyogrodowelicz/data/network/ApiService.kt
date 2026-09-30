@@ -17,11 +17,54 @@ import java.net.URL
 import java.net.URLEncoder
 import com.example.oplatyogrodowelicz.data.model.*
 import com.example.oplatyogrodowelicz.BuildConfig
+import com.example.oplatyogrodowelicz.data.AdmToken
 
 class ApiService {
     private val baseUrl = AppConfig.BASE_URL
     private val apiKey = BuildConfig.API_KEY
 
+
+    // Pliki wywoływane przed zalogowaniem - 401 z nich to NIE wygaśnięcie sesji
+    private val plikiBezSesji = setOf("login.php", "get_gardens.php", "get_users.php", "check_version.php")
+
+    /** Nagłówki wspólne: klucz API + token admina (pustego nie wysyłamy). */
+    private fun HttpURLConnection.ustawKlucze() {
+        setRequestProperty("X-API-KEY", apiKey)
+        val token = AdmToken.pobierz()
+        if (token.isNotEmpty()) setRequestProperty("X-ADM-TOKEN", token)
+    }
+
+    /** Kod odpowiedzi; 401 z "Sesja wygasła" = wylogowanie, inne 401 (np. zapisz_odczyt) = zwykły błąd. */
+    private fun HttpURLConnection.kodOdpowiedzi(): Int {
+        val kod = responseCode
+        if (kod == HttpURLConnection.HTTP_UNAUTHORIZED &&
+            url.path.substringAfterLast('/') !in plikiBezSesji) {
+            val tresc = try {
+                errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            } catch (e: Exception) { "" }
+            val komunikat = (try { JSONObject(tresc).optString("error") } catch (e: Exception) { "" })
+                .ifEmpty { tresc.ifEmpty { "Błąd autoryzacji" } }
+            if (komunikat.contains("Sesja wygasła", ignoreCase = true)) {
+                AdmToken.wygasla()
+            }
+            throw Exception(komunikat)
+        }
+        return kod
+    }
+
+    /** Treść błędu z login.php: {"error":..}, {"Błąd":..} albo goły napis JSON "Błędne hasło". */
+    private fun bladLogowania(tresc: String): String {
+        val t = tresc.trim()
+        return try {
+            when {
+                t.startsWith("{") -> JSONObject(t).let {
+                    it.optString("error").ifEmpty { it.optString("Błąd") }.ifEmpty { t }
+                }
+                t.startsWith("\"") -> JSONArray("[$t]").getString(0)
+                else -> t
+            }
+        } catch (e: Exception) { t }
+    }
 
     // Pobieranie listy miast z ogrodami
     suspend fun pobierzMiastaZOgrodami(): List<MiastoZOgrodami> = withContext(Dispatchers.IO) {
@@ -32,11 +75,11 @@ class ApiService {
             connection.requestMethod = "GET"
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("User-Agent", "OplatyOgrodoweApp/1.0")
-            connection.setRequestProperty("X-API-KEY", apiKey)  // ← DODANE
+            connection.ustawKlucze()  // ← DODANE
             connection.connectTimeout = AppConfig.CONNECTION_TIMEOUT
             connection.readTimeout = AppConfig.READ_TIMEOUT
 
-            val responseCode = connection.responseCode
+            val responseCode = connection.kodOdpowiedzi()
             if (responseCode == HttpURLConnection.HTTP_OK) {
                 val reader = BufferedReader(InputStreamReader(connection.inputStream))
                 val response = reader.readText()
@@ -62,7 +105,7 @@ class ApiService {
             connection.requestMethod = "POST"
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
             connection.setRequestProperty("User-Agent", "OplatyOgrodoweApp/1.0")
-            connection.setRequestProperty("X-API-KEY", apiKey)
+            connection.ustawKlucze()
             connection.setRequestProperty("Content-Length", postData.length.toString())
             connection.doOutput = true
             connection.connectTimeout = AppConfig.CONNECTION_TIMEOUT
@@ -73,7 +116,7 @@ class ApiService {
             writer.flush()
             writer.close()
 
-            val responseCode = connection.responseCode
+            val responseCode = connection.kodOdpowiedzi()
             if (responseCode == HttpURLConnection.HTTP_OK) {
                 val reader = BufferedReader(InputStreamReader(connection.inputStream, "UTF-8"))
                 val response = reader.readText()
@@ -82,7 +125,9 @@ class ApiService {
                 try {
                     // Sprawdź odpowiedź serwera
                     val jsonResponse = JSONObject(response)
-                    jsonResponse.getBoolean("success")
+                    val sukces = jsonResponse.getBoolean("success")
+                    if (sukces) AdmToken.zapisz(jsonResponse.optString("token", ""))
+                    sukces
                 } catch (e: Exception) {
                     // Jeśli nie można sparsować JSON, znaczy że serwer zwrócił błąd jako tekst
                     throw Exception("Odpowiedź serwera: $response")
@@ -94,7 +139,7 @@ class ApiService {
                     val errorReader = BufferedReader(InputStreamReader(errorStream, "UTF-8"))
                     val errorResponse = errorReader.readText()
                     errorReader.close()
-                    throw Exception(errorResponse)  // Surowa odpowiedź z serwera
+                    throw Exception(bladLogowania(errorResponse))
                 } else {
                     throw Exception("HTTP Error: $responseCode")
                 }
@@ -117,7 +162,7 @@ class ApiService {
             connection.requestMethod = "POST"
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
             connection.setRequestProperty("User-Agent", "OplatyOgrodoweApp/1.0")
-            connection.setRequestProperty("X-API-KEY", apiKey)
+            connection.ustawKlucze()
             connection.setRequestProperty("Content-Length", postData.length.toString())
             connection.doOutput = true
             connection.connectTimeout = AppConfig.CONNECTION_TIMEOUT
@@ -128,7 +173,7 @@ class ApiService {
             writer.flush()
             writer.close()
 
-            val responseCode = connection.responseCode
+            val responseCode = connection.kodOdpowiedzi()
             if (responseCode == HttpURLConnection.HTTP_OK) {
                 val reader = BufferedReader(InputStreamReader(connection.inputStream, "UTF-8"))
                 val response = reader.readText()
@@ -209,11 +254,11 @@ class ApiService {
             connection.requestMethod = "GET"
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("User-Agent", "OplatyOgrodoweApp/1.0")
-            connection.setRequestProperty("X-API-KEY", apiKey)
+            connection.ustawKlucze()
             connection.connectTimeout = AppConfig.CONNECTION_TIMEOUT
             connection.readTimeout = AppConfig.READ_TIMEOUT
 
-            val responseCode = connection.responseCode
+            val responseCode = connection.kodOdpowiedzi()
             if (responseCode == HttpURLConnection.HTTP_OK) {
                 val reader = BufferedReader(InputStreamReader(connection.inputStream))
                 val response = reader.readText()
@@ -340,7 +385,7 @@ class ApiService {
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
             connection.setRequestProperty("User-Agent", "OplatyOgrodoweApp/1.0")
-            connection.setRequestProperty("X-API-KEY", apiKey)
+            connection.ustawKlucze()
             connection.setRequestProperty("Content-Length", postData.length.toString())
             connection.connectTimeout = AppConfig.CONNECTION_TIMEOUT
             connection.readTimeout = AppConfig.READ_TIMEOUT
@@ -351,7 +396,7 @@ class ApiService {
             writer.flush()
             writer.close()
 
-            val responseCode = connection.responseCode
+            val responseCode = connection.kodOdpowiedzi()
             when (responseCode) {
                 HttpURLConnection.HTTP_OK -> {
                     val reader = BufferedReader(InputStreamReader(connection.inputStream, "UTF-8"))
@@ -444,7 +489,7 @@ class ApiService {
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
             connection.setRequestProperty("User-Agent", "OplatyOgrodoweApp/1.0")
-            connection.setRequestProperty("X-API-KEY", apiKey)
+            connection.ustawKlucze()
             connection.setRequestProperty("Content-Length", postData.length.toString())
             connection.connectTimeout = AppConfig.CONNECTION_TIMEOUT
             connection.readTimeout = AppConfig.READ_TIMEOUT
@@ -455,7 +500,7 @@ class ApiService {
             writer.flush()
             writer.close()
 
-            val responseCode = connection.responseCode
+            val responseCode = connection.kodOdpowiedzi()
             when (responseCode) {
                 HttpURLConnection.HTTP_OK -> {
                     val reader = BufferedReader(InputStreamReader(connection.inputStream, "UTF-8"))
@@ -545,7 +590,7 @@ class ApiService {
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
             connection.setRequestProperty("User-Agent", "OplatyOgrodoweApp/1.0")
-            connection.setRequestProperty("X-API-KEY", apiKey)
+            connection.ustawKlucze()
             connection.setRequestProperty("Content-Length", postData.length.toString())
             connection.connectTimeout = AppConfig.CONNECTION_TIMEOUT
             connection.readTimeout = AppConfig.READ_TIMEOUT
@@ -556,7 +601,7 @@ class ApiService {
             writer.flush()
             writer.close()
 
-            val responseCode = connection.responseCode
+            val responseCode = connection.kodOdpowiedzi()
             when (responseCode) {
                 HttpURLConnection.HTTP_OK -> {
                     val reader = BufferedReader(InputStreamReader(connection.inputStream, "UTF-8"))
